@@ -158,7 +158,7 @@ After the first run, subsequent runs are typically much faster because only new 
 
 ---
 
-## GitHub Actions (optional)
+## GitHub Actions
 
 You can run this via GitHub Actions to produce a downloadable ZIP artifact (handy if you don’t want to run Python locally).
 The workflow also caches `cache/` between runs to speed up scheduled builds.
@@ -167,7 +167,7 @@ See: `.github/workflows/build.yml`
 
 ---
 
-## License & attribution (important)
+## License & Attribution
 
 XKCD comics are licensed under **Creative Commons Attribution–NonCommercial 2.5**.
 
