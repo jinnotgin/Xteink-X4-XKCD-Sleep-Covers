@@ -48,7 +48,7 @@ Filenames are ranked for easy browsing:
 {rank}__xkcd{num}__d{delta}__{slug}.bmp
 ```
 
-* `rank`: `001..150` (sortable)
+* `rank`: `001..100` (sortable)
 * `xkcd####`: the comic number (zero-padded)
 * `d###`: fit delta × 1000 (smaller = closer to portrait ratio)
 * `slug`: sanitized title (optional but helpful)
