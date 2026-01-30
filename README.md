@@ -130,14 +130,14 @@ python xkcd_sleep_pack.py \
   --footer \
   --pad-top 8 \
   --pad-bottom 4
+```
 
 ---
 
-## Footer & padding behavior
+## Footer & Padding behavior
 
 * The footer and padding reserve vertical space; the comic is centered in the remaining content region.
 * Selection thresholds use the **content height** (after footer/padding) for `scale_to_fit`, so tall comics are filtered consistently with your chosen layout.
-```
 
 ---
 
