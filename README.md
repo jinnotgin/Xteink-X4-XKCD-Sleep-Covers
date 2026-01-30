@@ -43,6 +43,7 @@ SD_CARD_ROOT/
 * Output: **BMP**, **24-bit RGB**, **uncompressed**
 * Resolution: **480×800**
 * Padding is used (white background) to preserve the comic’s aspect ratio without cropping.
+* Optional footer bar and top/bottom padding reserve space while still outputting **480×800**.
 
 Filenames are ranked for easy browsing:
 
@@ -95,23 +96,29 @@ tqdm
 
 ## Usage
 
-Generate the default top 150 into a local folder:
+Generate the default top 100 into a local folder:
 
 ```bash
-python xkcd_sleep_pack.py --out ./out/sleep --n 150
+python xkcd_sleep_pack.py --out ./out/sleep --n 100
 ```
 
 Then copy the entire `sleep/` folder to the **root of your SD card**.
 
 ### Useful flags
 
-* `--n` — number of images (default 150)
+* `--n` — number of images (default 100)
 * `--cache-dir` — cache folder path (default `./cache`)
 * `--refresh-cache` — ignore cache and rebuild metadata/dimensions
 * `--keys` — comma-separated key comic IDs
 * `--key_weight` — how strongly keys are preferred in ranking (no duplicate files)
 * `--workers` — parallel download worker threads
 * `--rps` — **global** HTTP request cap (requests/sec) across all threads
+* `--footer` — add a small footer bar with `xkcd # — title`
+* `--footer-h` — footer height in pixels (default 24)
+* `--footer-font` — footer font size (default 16)
+* `--footer-bg` — footer background color (default `#FFFFFF`)
+* `--pad-top` — top padding in pixels (default 8)
+* `--pad-bottom` — bottom padding in pixels (default 4)
 
 Example (faster but polite):
 
@@ -122,7 +129,17 @@ python xkcd_sleep_pack.py \
   --workers 8 \
   --rps 4 \
   --keys 936,927,303,1319,1205,323,386,353,1179 \
-  --key_weight 2.5
+  --key_weight 2.5 \
+  --footer \
+  --pad-top 8 \
+  --pad-bottom 4
+
+---
+
+## Footer & padding behavior
+
+* The footer and padding reserve vertical space; the comic is centered in the remaining content region.
+* Selection thresholds use the **content height** (after footer/padding) for `scale_to_fit`, so tall comics are filtered consistently with your chosen layout.
 ```
 
 ---

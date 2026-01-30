@@ -6,7 +6,7 @@ on:
       n:
         description: "Number of images"
         required: true
-        default: "150"
+        default: "100"
       workers:
         description: "Parallel download workers"
         required: true
@@ -19,6 +19,10 @@ on:
         description: "Rebuild cache (true/false)"
         required: true
         default: "false"
+      create_release:
+        description: "Create a GitHub release and attach the ZIP (true/false)"
+        required: true
+        default: "false"
   schedule:
     - cron: "0 3 * * 1"  # Mondays 03:00 UTC
 
@@ -26,6 +30,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: write
     env:
       TZ: UTC
 
@@ -61,21 +67,28 @@ jobs:
           WORKERS="${{ inputs.workers }}"
           RPS="${{ inputs.rps }}"
           REFRESH="${{ inputs.refresh_cache }}"
+          CREATE_RELEASE="${{ inputs.create_release }}"
 
-          [ -z "$N" ] && N="150"
+          [ -z "$N" ] && N="100"
           [ -z "$WORKERS" ] && WORKERS="8"
           [ -z "$RPS" ] && RPS="4"
           [ -z "$REFRESH" ] && REFRESH="false"
+          [ -z "$CREATE_RELEASE" ] && CREATE_RELEASE="false"
 
           DATE="$(date +%F)"  # YYYY-MM-DD
           ARTIFACT_NAME="xkcd_sleep_pack_n${N}_${DATE}"
+          TAG="xkcd-sleep-pack-${DATE}-n${N}-run${GITHUB_RUN_NUMBER}"
+          RELEASE_NAME="XKCD Sleep Pack ${DATE} (n=${N})"
 
           echo "n=$N" >> "$GITHUB_OUTPUT"
           echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
           echo "rps=$RPS" >> "$GITHUB_OUTPUT"
           echo "refresh=$REFRESH" >> "$GITHUB_OUTPUT"
+          echo "create_release=$CREATE_RELEASE" >> "$GITHUB_OUTPUT"
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Build pack
         run: |
@@ -106,6 +119,21 @@ jobs:
           path: out/${{ steps.vars.outputs.artifact_name }}.zip
           retention-days: 14
 
+      - name: Create release (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.vars.outputs.create_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.release_name }}
+          body: |
+            Automated build for XKCD Sleep Pack.
+            Date (UTC): ${{ steps.vars.outputs.date }}
+            Images: ${{ steps.vars.outputs.n }}
+            Workers: ${{ steps.vars.outputs.workers }}
+            Global RPS cap: ${{ steps.vars.outputs.rps }}
+            Refresh cache: ${{ steps.vars.outputs.refresh }}
+          files: out/${{ steps.vars.outputs.artifact_name }}.zip
+
       - name: Job summary
         run: |
           {
@@ -117,4 +145,5 @@ jobs:
             echo "- Global RPS cap: **${{ steps.vars.outputs.rps }}**"
             echo "- Refresh cache: **${{ steps.vars.outputs.refresh }}**"
             echo "- Artifact: **${{ steps.vars.outputs.artifact_name }}.zip**"
+            echo "- Create release: **${{ steps.vars.outputs.create_release }}**"
           } >> "$GITHUB_STEP_SUMMARY"
