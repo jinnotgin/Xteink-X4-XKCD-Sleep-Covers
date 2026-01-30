@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
 import re
 import sys
 import time
@@ -15,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 from tqdm import tqdm
 
 XKCD_LATEST_JSON = "https://xkcd.com/info.0.json"
@@ -34,14 +33,18 @@ DEFAULT_GENERAL_MAX_DELTA_START = 0.32
 DEFAULT_GENERAL_MAX_DELTA_MAX = 0.70
 DEFAULT_GENERAL_MAX_DELTA_STEP = 0.04
 
-DEFAULT_MIN_SCALE_START = 0.75
-DEFAULT_MIN_SCALE_MIN = 0.30
+DEFAULT_MIN_SCALE_START = 0.96
+DEFAULT_MIN_SCALE_MIN = 0.80
 DEFAULT_MIN_SCALE_STEP = 0.02
 
 DEFAULT_DELAY_S = 0.0     # extra politeness sleep AFTER each request (optional)
 DEFAULT_TIMEOUT_S = 25
 DEFAULT_WORKERS = 8
 DEFAULT_RPS = 3.0         # global cap across ALL threads (requests/second)
+
+DEFAULT_FOOTER_H = 24
+DEFAULT_FOOTER_FONT = 16
+DEFAULT_FOOTER_BG = "#FFFFFF"
 
 
 @dataclass
@@ -54,7 +57,7 @@ class Comic:
     h: int
     ar: float
     fit_delta: float
-    scale_to_fit: float
+    scale_to_fit: float        # computed against content height (footer-aware)
     is_key: bool
     cached_image_path: Optional[str] = None
 
@@ -87,19 +90,85 @@ def read_image_dimensions(image_bytes: bytes) -> Optional[Tuple[int, int]]:
     return None
 
 
-def render_to_bmp_from_path(src_path: Path, out_path: Path) -> None:
+def render_to_bmp_from_path(
+    src_path: Path,
+    out_path: Path,
+    *,
+    footer_text: Optional[str] = None,
+    footer_h: int = DEFAULT_FOOTER_H,
+    footer_font_size: int = DEFAULT_FOOTER_FONT,
+    footer_bg: str = DEFAULT_FOOTER_BG,
+) -> None:
+    """
+    Render to 480x800 uncompressed 24-bit BMP.
+    If footer_text is provided, reserve footer_h pixels at bottom for a caption bar.
+    """
     with Image.open(src_path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         w, h = im.size
-        scale = min(TARGET_W / w, TARGET_H / h)
+
+        content_h = TARGET_H
+        if footer_text:
+            content_h = max(1, TARGET_H - int(footer_h))
+
+        scale = min(TARGET_W / w, content_h / h)
         new_w = max(1, int(round(w * scale)))
         new_h = max(1, int(round(h * scale)))
+
         im_resized = im.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
 
         canvas = Image.new("RGB", (TARGET_W, TARGET_H), (255, 255, 255))
+
+        # Center comic in content area (excluding footer)
         x = (TARGET_W - new_w) // 2
-        y = (TARGET_H - new_h) // 2
+        y = (content_h - new_h) // 2
         canvas.paste(im_resized, (x, y))
+
+        if footer_text:
+            draw = ImageDraw.Draw(canvas)
+
+            # Footer background
+            try:
+                draw.rectangle([0, content_h, TARGET_W, TARGET_H], fill=footer_bg)
+            except Exception:
+                draw.rectangle([0, content_h, TARGET_W, TARGET_H], fill=(255, 255, 255))
+
+            # Font
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", footer_font_size)
+            except Exception:
+                font = ImageFont.load_default()
+
+            # Truncate to fit width
+            max_w = TARGET_W - 16
+            text = footer_text.strip()
+
+            def text_width(t: str) -> int:
+                bbox = draw.textbbox((0, 0), t, font=font)
+                return bbox[2] - bbox[0]
+
+            if text_width(text) > max_w:
+                ell = "…"
+                lo, hi = 0, len(text)
+                best = ""
+                while lo <= hi:
+                    mid = (lo + hi) // 2
+                    cand = text[:mid].rstrip() + ell
+                    if text_width(cand) <= max_w:
+                        best = cand
+                        lo = mid + 1
+                    else:
+                        hi = mid - 1
+                text = best or (text[: max(0, len(text) - 1)] + ell)
+
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            tx = (TARGET_W - tw) // 2
+            ty = content_h + (int(footer_h) - th) // 2
+            draw.text((tx, ty), text, fill=(0, 0, 0), font=font)
+
+        # BMP saved from RGB at this size is 24-bit and uncompressed by default in Pillow.
         canvas.save(out_path, format="BMP")
 
 
@@ -180,6 +249,7 @@ def adaptive_select(
 
 
 def estimate_bmp_bytes_per_image() -> int:
+    # 24-bit BMP pixel bytes = w*h*3, plus header ~54 bytes. Padding is 0 for width=480.
     return TARGET_W * TARGET_H * 3 + 54
 
 
@@ -202,7 +272,7 @@ def save_cache(meta_path: Path, comics_map: Dict[str, dict]) -> None:
     tmp_path.replace(meta_path)
 
 
-def build_comic_from_cached_entry(num: int, entry: dict, is_key: bool) -> Optional[Comic]:
+def build_comic_from_cached_entry(num: int, entry: dict, is_key: bool, content_h: int) -> Optional[Comic]:
     try:
         title = entry["title"]
         img_url = entry["img_url"]
@@ -213,7 +283,7 @@ def build_comic_from_cached_entry(num: int, entry: dict, is_key: bool) -> Option
 
         ar = w / h
         fit_delta = abs(ar - TARGET_AR)
-        scale_to_fit = min(TARGET_W / w, TARGET_H / h)
+        scale_to_fit = min(TARGET_W / w, content_h / h)
 
         c = Comic(
             num=num,
@@ -237,7 +307,7 @@ def build_comic_from_cached_entry(num: int, entry: dict, is_key: bool) -> Option
 
 
 # -------------------------
-# Global rate limiter (token-ish scheduler)
+# Global rate limiter (overall RPS cap shared by all threads)
 # -------------------------
 class RateLimiter:
     """Global RPS limiter shared by all threads. Ensures <= rps overall."""
@@ -315,6 +385,7 @@ def process_one_num(
     timeout_s: float,
     extra_delay_s: float,
     user_agent: str,
+    content_h: int,
 ) -> Optional[Comic]:
     key = str(num)
 
@@ -323,7 +394,7 @@ def process_one_num(
         with cache_lock:
             entry = cache_map.get(key)
         if entry:
-            c = build_comic_from_cached_entry(num, entry, is_key)
+            c = build_comic_from_cached_entry(num, entry, is_key, content_h)
             if c is not None:
                 return c
 
@@ -344,12 +415,12 @@ def process_one_num(
         with cache_lock:
             entry = cache_map.get(key)
             if entry and entry.get("img_url") == img_url and entry.get("w") and entry.get("h"):
-                c = build_comic_from_cached_entry(num, entry, is_key)
+                # Update title/alt in case they changed (rare, but harmless)
+                entry["title"] = title
+                entry["alt"] = alt
+                cache_map[key] = entry
+                c = build_comic_from_cached_entry(num, entry, is_key, content_h)
                 if c is not None:
-                    # Update title/alt in case they were missing
-                    entry["title"] = title
-                    entry["alt"] = alt
-                    cache_map[key] = entry
                     return c
 
     # Need to download image to get dimensions (and cache original)
@@ -385,13 +456,13 @@ def process_one_num(
         }
         entry = cache_map[key]
 
-    return build_comic_from_cached_entry(num, entry, is_key)
+    return build_comic_from_cached_entry(num, entry, is_key, content_h)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--n", type=int, default=150)
+    ap.add_argument("--n", type=int, default=100)
 
     ap.add_argument("--cache-dir", type=str, default="./cache")
     ap.add_argument("--refresh-cache", action="store_true")
@@ -413,6 +484,17 @@ def main() -> int:
     ap.add_argument("--min_scale_step", type=float, default=DEFAULT_MIN_SCALE_STEP)
 
     ap.add_argument("--keys", type=str, default=",".join(str(x) for x in DEFAULT_KEYS))
+
+    # Footer options
+    ap.add_argument("--footer", action="store_true",
+                    help="Add a small footer bar with 'xkcd # — title' to each BMP.")
+    ap.add_argument("--footer-h", type=int, default=DEFAULT_FOOTER_H,
+                    help=f"Footer height in pixels (default: {DEFAULT_FOOTER_H}).")
+    ap.add_argument("--footer-font", type=int, default=DEFAULT_FOOTER_FONT,
+                    help=f"Footer font size (default: {DEFAULT_FOOTER_FONT}).")
+    ap.add_argument("--footer-bg", type=str, default=DEFAULT_FOOTER_BG,
+                    help=f"Footer background color (default: {DEFAULT_FOOTER_BG}).")
+
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -432,13 +514,17 @@ def main() -> int:
         except ValueError:
             pass
 
-    user_agent = "Xteinkx4-XKCD-Sleep-Covers/1.2 (noncommercial, attribution; local script)"
+    # Footer-aware content height (used for scale_to_fit during selection)
+    content_h = TARGET_H - int(args.footer_h) if args.footer else TARGET_H
+    content_h = max(1, content_h)
+
+    user_agent = "Xteinkx4-XKCD-Sleep-Covers/1.3 (noncommercial, attribution; local script)"
     limiter = RateLimiter(args.rps)
 
     cache_map = load_cache(meta_path)
     cache_lock = threading.Lock()
 
-    # Fetch latest (single request)
+    # Fetch latest
     latest = http_get_json(XKCD_LATEST_JSON, limiter, args.timeout, args.delay, user_agent)
     if not latest or "num" not in latest:
         print(f"Failed to fetch latest XKCD JSON from {XKCD_LATEST_JSON}", file=sys.stderr)
@@ -467,6 +553,7 @@ def main() -> int:
                 args.timeout,
                 args.delay,
                 user_agent,
+                content_h,
             ): num
             for num in nums
         }
@@ -478,7 +565,6 @@ def main() -> int:
             else:
                 comics.append(c)
 
-    # Save cache after scan
     with cache_lock:
         save_cache(meta_path, cache_map)
 
@@ -510,6 +596,8 @@ def main() -> int:
 
     credits_lines: List[str] = []
     print(f"Selection meta: {meta}")
+    if args.footer:
+        print(f"Footer enabled: footer_h={args.footer_h} font={args.footer_font} bg={args.footer_bg}")
 
     # Rendering uses cached images; should be mostly local disk.
     for idx, c in enumerate(tqdm(selected, desc="Rendering BMPs", unit="img"), start=1):
@@ -539,14 +627,26 @@ def main() -> int:
                 if str(c.num) in cache_map:
                     cache_map[str(c.num)]["image_path"] = str(src_path)
 
+        footer_text = None
+        if args.footer:
+            footer_text = f"xkcd #{c.num} — {c.title}"
+
         try:
-            render_to_bmp_from_path(src_path, out_path)
+            render_to_bmp_from_path(
+                src_path,
+                out_path,
+                footer_text=footer_text,
+                footer_h=args.footer_h,
+                footer_font_size=args.footer_font,
+                footer_bg=args.footer_bg,
+            )
         except Exception as e:
             print(f"Warning: failed to render xkcd {c.num}: {e}", file=sys.stderr)
             continue
 
         credits_lines.append(
-            f"{rank:03d}\txkcd {c.num}\t{c.title}\t(ar={c.ar:.3f}, delta={c.fit_delta:.3f}, scale={c.scale_to_fit:.3f})\t{c.img_url}"
+            f"{rank:03d}\txkcd {c.num}\t{c.title}\t(ar={c.ar:.3f}, delta={c.fit_delta:.3f}, "
+            f"scale={c.scale_to_fit:.3f})\t{c.img_url}"
         )
 
     with cache_lock:
@@ -556,8 +656,10 @@ def main() -> int:
     with credits_path.open("w", encoding="utf-8") as f:
         f.write("XKCD Sleep Pack\n")
         f.write("License: XKCD comics are CC BY-NC 2.5. Please attribute Randall Munroe / xkcd.com.\n")
-        f.write("Generated files are resized/padded to 480x800 BMP for a device sleep screen.\n\n")
-        f.write("Rank\tComic\tTitle\tInfo\tImageURL\n")
+        f.write("Generated files are resized/padded to 480x800 BMP for a device sleep screen.\n")
+        if args.footer:
+            f.write("Footer bar enabled: includes comic number and title on each image.\n")
+        f.write("\nRank\tComic\tTitle\tInfo\tImageURL\n")
         f.write("\n".join(credits_lines))
         f.write("\n")
 
