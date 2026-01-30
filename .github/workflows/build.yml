@@ -7,13 +7,27 @@ on:
         description: "Number of images"
         required: true
         default: "150"
+      workers:
+        description: "Parallel download workers"
+        required: true
+        default: "8"
+      rps:
+        description: "Global requests/sec cap (politeness limit)"
+        required: true
+        default: "4"
+      refresh_cache:
+        description: "Rebuild cache (true/false)"
+        required: true
+        default: "false"
   schedule:
-    - cron: "0 3 * * 1"  # Mondays 03:00 UTC (edit as you like)
+    - cron: "0 3 * * 1"  # Mondays 03:00 UTC
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      TZ: UTC
 
     steps:
       - name: Checkout
@@ -29,20 +43,78 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Cache the script cache/ dir between runs to avoid rescanning/redownloading
+      - name: Cache XKCD metadata/images
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: xkcd-cache-${{ runner.os }}-py311-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            xkcd-cache-${{ runner.os }}-py311-
+
+      - name: Compute build vars
+        id: vars
+        shell: bash
+        run: |
+          # Defaults for scheduled runs (inputs are empty on schedule)
+          N="${{ inputs.n }}"
+          WORKERS="${{ inputs.workers }}"
+          RPS="${{ inputs.rps }}"
+          REFRESH="${{ inputs.refresh_cache }}"
+
+          [ -z "$N" ] && N="150"
+          [ -z "$WORKERS" ] && WORKERS="8"
+          [ -z "$RPS" ] && RPS="4"
+          [ -z "$REFRESH" ] && REFRESH="false"
+
+          DATE="$(date +%F)"  # YYYY-MM-DD
+          ARTIFACT_NAME="xkcd_sleep_pack_n${N}_${DATE}"
+
+          echo "n=$N" >> "$GITHUB_OUTPUT"
+          echo "workers=$WORKERS" >> "$GITHUB_OUTPUT"
+          echo "rps=$RPS" >> "$GITHUB_OUTPUT"
+          echo "refresh=$REFRESH" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Build pack
         run: |
-          N="${{ inputs.n || '150' }}"
+          EXTRA=""
+          if [ "${{ steps.vars.outputs.refresh }}" = "true" ]; then
+            EXTRA="--refresh-cache"
+          fi
+
           mkdir -p out/sleep
-          python xkcd_sleep_pack.py --out out/sleep --n "$N"
+
+          python xkcd_sleep_pack.py \
+            --out out/sleep \
+            --n "${{ steps.vars.outputs.n }}" \
+            --cache-dir ./cache \
+            --workers "${{ steps.vars.outputs.workers }}" \
+            --rps "${{ steps.vars.outputs.rps }}" \
+            $EXTRA
 
       - name: Zip output
         run: |
           cd out
-          zip -r xkcd_sleep_pack.zip sleep
+          zip -r "${{ steps.vars.outputs.artifact_name }}.zip" sleep
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xkcd_sleep_pack
-          path: out/xkcd_sleep_pack.zip
+          name: ${{ steps.vars.outputs.artifact_name }}
+          path: out/${{ steps.vars.outputs.artifact_name }}.zip
           retention-days: 14
+
+      - name: Job summary
+        run: |
+          {
+            echo "## XKCD Sleep Pack Build"
+            echo ""
+            echo "- Date (UTC): **${{ steps.vars.outputs.date }}**"
+            echo "- Images: **${{ steps.vars.outputs.n }}**"
+            echo "- Workers: **${{ steps.vars.outputs.workers }}**"
+            echo "- Global RPS cap: **${{ steps.vars.outputs.rps }}**"
+            echo "- Refresh cache: **${{ steps.vars.outputs.refresh }}**"
+            echo "- Artifact: **${{ steps.vars.outputs.artifact_name }}.zip**"
+          } >> "$GITHUB_STEP_SUMMARY"
