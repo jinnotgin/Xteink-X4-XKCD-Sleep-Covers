@@ -1,0 +1,48 @@
+name: Build XKCD Sleep Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "Number of images"
+        required: true
+        default: "150"
+  schedule:
+    - cron: "0 3 * * 1"  # Mondays 03:00 UTC (edit as you like)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build pack
+        run: |
+          N="${{ inputs.n || '150' }}"
+          mkdir -p out/sleep
+          python xkcd_sleep_pack.py --out out/sleep --n "$N"
+
+      - name: Zip output
+        run: |
+          cd out
+          zip -r xkcd_sleep_pack.zip sleep
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xkcd_sleep_pack
+          path: out/xkcd_sleep_pack.zip
+          retention-days: 14
