@@ -1,9 +1,6 @@
 # Xteink X4 XKCD Sleep Covers
 
-Generate **portrait-friendly XKCD comics** as **480×800, 24-bit, uncompressed BMP** images for **Xteink X4** devices running the **CrossPoint Reader** firmware.
-
-- Device: https://www.xteink.com/products/xteink-x4
-- Firmware: https://github.com/crosspoint-reader/crosspoint-reader
+Generate **portrait-friendly XKCD comics** as **480×800, 24-bit, uncompressed BMP** images for **[Xteink X4](https://www.xteink.com/products/xteink-x4)** devices running the **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** firmware.
 
 This repo:
 - Scans XKCD **up to the current comic**
