@@ -19,6 +19,10 @@ on:
         description: "Rebuild cache (true/false)"
         required: true
         default: "false"
+      footer:
+        description: "Add footer bar with comic number/title (true/false)"
+        required: true
+        default: "true"
       create_release:
         description: "Create a GitHub release and attach the ZIP (true/false)"
         required: true
@@ -68,12 +72,14 @@ jobs:
           RPS="${{ inputs.rps }}"
           REFRESH="${{ inputs.refresh_cache }}"
           CREATE_RELEASE="${{ inputs.create_release }}"
+          FOOTER="${{ inputs.footer }}"
 
           [ -z "$N" ] && N="100"
           [ -z "$WORKERS" ] && WORKERS="8"
           [ -z "$RPS" ] && RPS="4"
           [ -z "$REFRESH" ] && REFRESH="false"
           [ -z "$CREATE_RELEASE" ] && CREATE_RELEASE="false"
+          [ -z "$FOOTER" ] && FOOTER="true"
 
           DATE="$(date +%F)"  # YYYY-MM-DD
           ARTIFACT_NAME="xkcd_sleep_pack_n${N}_${DATE}"
@@ -85,6 +91,7 @@ jobs:
           echo "rps=$RPS" >> "$GITHUB_OUTPUT"
           echo "refresh=$REFRESH" >> "$GITHUB_OUTPUT"
           echo "create_release=$CREATE_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "footer=$FOOTER" >> "$GITHUB_OUTPUT"
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -95,6 +102,9 @@ jobs:
           EXTRA=""
           if [ "${{ steps.vars.outputs.refresh }}" = "true" ]; then
             EXTRA="--refresh-cache"
+          fi
+          if [ "${{ steps.vars.outputs.footer }}" = "true" ]; then
+            EXTRA="$EXTRA --footer"
           fi
 
           mkdir -p out/sleep
@@ -144,6 +154,7 @@ jobs:
             echo "- Workers: **${{ steps.vars.outputs.workers }}**"
             echo "- Global RPS cap: **${{ steps.vars.outputs.rps }}**"
             echo "- Refresh cache: **${{ steps.vars.outputs.refresh }}**"
+            echo "- Footer enabled: **${{ steps.vars.outputs.footer }}**"
             echo "- Artifact: **${{ steps.vars.outputs.artifact_name }}.zip**"
             echo "- Create release: **${{ steps.vars.outputs.create_release }}**"
           } >> "$GITHUB_STEP_SUMMARY"
